@@ -1,93 +1,87 @@
 import streamlit as st
 from supabase import create_client
+from datetime import datetime
 
 # --- KONFIGURACJA POŁĄCZENIA ---
 try:
     URL = st.secrets["SUPABASE_URL"]
     KEY = st.secrets["SUPABASE_KEY"]
     supabase = create_client(URL, KEY)
-except Exception as e:
-    st.error("Błąd konfiguracji Secrets!")
+except Exception:
+    st.error("Błąd konfiguracji Secrets w Streamlit Cloud!")
     st.stop()
 
-# --- LOGIKA BIZNESOWA (FUNKCJE PYTHON) ---
-def pobierz_wszystkie_produkty():
-    response = supabase.table("magazyn").select("*").order("nazwa").execute()
-    return response.data
+# --- FUNKCJE LOGICZNE ---
+def pobierz_produkty():
+    # Sortujemy od najnowszej daty dodania
+    res = supabase.table("magazyn").select("*").order("data_dodania", ascending=False).execute()
+    return res.data
 
-def dodaj_nowy_produkt(nazwa, ilosc, cena):
-    supabase.table("magazyn").insert({"nazwa": nazwa, "ilosc": ilosc, "cena": cena}).execute()
+def dodaj_produkt(nazwa, ilosc, cena, data):
+    supabase.table("magazyn").insert({
+        "nazwa": nazwa, 
+        "ilosc": ilosc, 
+        "cena": cena, 
+        "data_dodania": str(data)
+    }).execute()
 
-def aktualizuj_ilosc(id_produktu, nowa_ilosc):
-    """Zmienia ilość produktu na nową wartość."""
+def aktualizuj_stan(id_p, nowa_ilosc):
     if nowa_ilosc <= 0:
-        # Jeśli ilość spadnie do 0, usuwamy produkt całkowicie
-        supabase.table("magazyn").delete().eq("id", id_produktu).execute()
+        supabase.table("magazyn").delete().eq("id", id_p).execute()
     else:
-        # W przeciwnym razie tylko aktualizujemy liczbę
-        supabase.table("magazyn").update({"ilosc": nowa_ilosc}).eq("id", id_produktu).execute()
+        supabase.table("magazyn").update({"ilosc": nowa_ilosc}).eq("id", id_p).execute()
 
-# --- INTERFEJS UŻYTKOWNIKA (STREAMLIT) ---
-st.set_page_config(page_title="Magazyn Domowy", layout="wide", page_icon="📦")
-st.title("📦 System Zarządzania Magazynem")
+# --- INTERFEJS ---
+st.set_page_config(page_title="Magazyn Domowy", layout="wide")
+st.title("📦 Magazyn z obsługą dat")
 
-# --- PANEL BOCZNY: DODAWANIE ---
+# Sidebar: Dodawanie
 with st.sidebar:
-    st.header("➕ Dodaj nowy przedmiot")
-    with st.form("formularz_dodawania", clear_on_submit=True):
-        nazwa_input = st.text_input("Nazwa przedmiotu")
-        ilosc_input = st.number_input("Ilość (szt.)", min_value=1, step=1)
-        cena_input = st.number_input("Cena (PLN)", min_value=0.0, format="%.2f")
-        if st.form_submit_button("Zapisz w magazynie"):
-            if nazwa_input:
-                dodaj_nowy_produkt(nazwa_input, ilosc_input, cena_input)
+    st.header("➕ Nowa dostawa")
+    with st.form("dodaj_form", clear_on_submit=True):
+        n = st.text_input("Nazwa")
+        i = st.number_input("Ilość", min_value=1, step=1)
+        c = st.number_input("Cena (zł)", min_value=0.0, format="%.2f")
+        d = st.date_input("Data przychodu", value=datetime.now())
+        if st.form_submit_button("Dodaj do bazy"):
+            if n:
+                dodaj_produkt(n, i, c, d)
                 st.rerun()
 
-# --- GŁÓWNY WIDOK: TABELA ---
-st.subheader("📋 Aktualny stan zapasów")
-produkty = pobierz_wszystkie_produkty()
+# Widok główny
+produkty = pobierz_produkty()
 
 if not produkty:
     st.info("Magazyn jest pusty.")
 else:
-    # Nagłówki
-    naglowki = st.columns([1, 4, 2, 2, 2])
+    # Poprawione nagłówki (Markdown zamiast .bold)
+    naglowki = st.columns([1, 3, 2, 2, 2, 2])
     naglowki[0].markdown("**ID**")
-    naglowki[1].markdown("**Nazwa produktu**")
+    naglowki[1].markdown("**Nazwa**")
     naglowki[2].markdown("**Ilość**")
     naglowki[3].markdown("**Cena**")
-    naglowki[4].markdown("**Akcje**")
+    naglowki[4].markdown("**Data**")
+    naglowki[5].markdown("**Akcje**")
     st.divider()
 
     for p in produkty:
-        c1, c2, c3, c4, c5 = st.columns([1, 4, 2, 2, 2])
+        c1, c2, c3, c4, c5, c6 = st.columns([1, 3, 2, 2, 2, 2])
         c1.text(p['id'])
         c2.text(p['nazwa'])
         c3.text(f"{p['ilosc']} szt.")
         c4.text(f"{p['cena']:.2f} zł")
+        c5.text(p.get('data_dodania', '---'))
         
-        # --- NOWA FUNKCJA USUWANIA CZĘŚCIOWEGO ---
-        with c5.popover("⚙️ Zarządzaj"):
-            st.write(f"Produkt: **{p['nazwa']}**")
-            ile_odjac = st.number_input(
-                "Ile sztuk usunąć?", 
-                min_value=1, 
-                max_value=p['ilosc'], 
-                key=f"val_{p['id']}"
-            )
-            
-            if st.button(f"Zdejmij {ile_odjac} szt.", key=f"btn_{p['id']}", use_container_width=True):
-                nowa_ilosc = p['ilosc'] - ile_odjac
-                aktualizuj_ilosc(p['id'], nowa_ilosc)
-                st.toast(f"Zaktualizowano {p['nazwa']}")
+        with c6.popover("⚙️ Edytuj"):
+            ile = st.number_input("Ile sztuk zdjąć?", min_value=1, max_value=p['ilosc'], key=f"i_{p['id']}")
+            if st.button(f"Usuń {ile} szt.", key=f"b_{p['id']}", use_container_width=True):
+                aktualizuj_stan(p['id'], p['ilosc'] - ile)
                 st.rerun()
-            
-            st.divider()
-            if st.button("🗑️ Usuń wszystko", key=f"del_all_{p['id']}", type="primary", use_container_width=True):
-                aktualizuj_ilosc(p['id'], 0) # Przesłanie 0 usunie rekord
+            if st.button("🗑️ Usuń całość", key=f"all_{p['id']}", type="primary", use_container_width=True):
+                aktualizuj_stan(p['id'], 0)
                 st.rerun()
 
-# --- STOPKA ---
+# Podsumowanie
 st.divider()
-total_wartosc = sum(p['ilosc'] * p['cena'] for p in produkty)
-st.metric("Całkowita wartość magazynu", f"{total_wartosc:.2f} PLN")
+total = sum(p['ilosc'] * p['cena'] for p in produkty)
+st.metric("Wartość całkowita towarów", f"{total:.2f} PLN")
